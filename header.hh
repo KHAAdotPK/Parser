@@ -6,6 +6,8 @@
 #ifndef CSV_PARSER_LIB_PARSER_HEADER_HH
 #define CSV_PARSER_LIB_PARSER_HEADER_HH
 
+#define CORPUS_SERIALIZATION_FINAL_FILENAME "corpus_final.bin"
+
 /*
     <fstream>: Provides functionality for file-based input/output operations.
                It allows us to open, read from, and write to files.
@@ -32,6 +34,12 @@
     which is a more explicit and self-documenting way to achieve the same result.
 */
 #include <limits>    // For std::numeric_limits
+
+/*
+    Circular Include Reason: Parser will be used by Corpus and Corpus will be used by Parser.
+    Consequence: The include of both of these packages remain order free.
+*/
+#include "./../Corpus/header.hh"
 
 // Source Files
 #include "lib/src/WordRecord.hh"

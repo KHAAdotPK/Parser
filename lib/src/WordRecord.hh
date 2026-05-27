@@ -3,12 +3,90 @@
     Q@hackers.pk
  */
 
+/* 
+    WordRecord.hh
+    --------------
+    - This file has no dependency on any other file. It is the base file.
+ */
+
 #ifndef WORD_RECORD_HH
 #define WORD_RECORD_HH
 
 // Forward declarations
 struct Line; 
 struct OccurrenceNode;
+
+struct WordRecord_new
+{
+    size_t word_id;         // unique integer assigned to this word, index into "word_id_to_hash table"
+    std::string word;       // the word itself
+    /*  
+        Number of occurrences of this word/word_id in the corpus.     
+        Make sure n is being incremented in all following cases:
+
+        Case B  — hash_table[key]->word == token (direct match)     → word_record->n++ 
+        Case C  — hash_table[probe]->word == token (probe match)    → word_record->n++ 
+        Case A  — hash_table[key] == nullptr (new word)             → n initialised to 1
+        Case D  — hash_table[probe] == nullptr (new displaced word) → n initialised to 1
+     */
+    size_t n; // Frequency of this word in the corpus. The number of occurrences of this token/word in the corpus.
+    
+    WordRecord_new() : word_id{0}, word{}, n{0}   // adjust type/value to match actual member types
+    {        
+    }
+    
+    WordRecord_new(size_t _word_id, std::string _word, size_t _n) : word_id(_word_id), word(_word), n(_n)
+    {        
+    }
+
+    // Copy constructor - needed for vector<WordRecord>
+    WordRecord_new(const WordRecord_new&) = default;
+    // Assignment operator - needed for vector<WordRecord>
+    WordRecord_new& operator=(const WordRecord_new&) = default;
+
+    std::string get_word(void) const
+    {
+        return word;
+    }
+
+    size_t get_word_id(void) const
+    {
+        return word_id;
+    }
+
+    size_t get_n(void) const
+    {
+        return n;
+    }
+};
+typedef struct WordRecord_new WORDRECOROD;
+
+struct Token_new 
+{    
+    size_t key; // hash key of the first token in the line, used for quick access to the hash table
+
+    struct Token_new* next; // pointer to next line
+    struct Token_new* prev; // pointer to previous line
+
+    Token_new() : key{0}, next{nullptr}, prev{nullptr}
+    {
+    }
+};
+typedef struct Token_new TOKEN_NEW;
+
+struct Lines_new
+{
+    size_t n; // Number of tokens in this line
+    TOKEN_NEW* tokens; // Linked list of tokens in this line
+
+    struct Lines_new* next; // pointer to next line 
+    struct Lines_new* prev; // pointer to previous line
+
+    Lines_new() : n{0}, tokens{nullptr}, next{nullptr}, prev{nullptr}
+    {
+    }
+};
+typedef struct Lines_new LINES_NEW;
 
 struct WordRecord
 {
@@ -25,6 +103,11 @@ struct WordRecord
      */
     size_t n; // Frequency of this word in the corpus. The number of occurrences of this token/word in the corpus.
     OccurrenceNode* head;   // points to first occurrence in corpus
+
+    //WordRecord() = default;
+
+    WordRecord() : word_id{0}, word{}, n{0}, head{nullptr}   // adjust type/value to match actual member types
+    {}
     
     WordRecord(size_t _word_id, std::string _word, size_t _n, OccurrenceNode* _head) : word_id(_word_id), word(_word), n(_n), head(_head)
     {
@@ -37,6 +120,16 @@ struct WordRecord
     WordRecord(const WordRecord&) = default;
     // Assignment operator - needed for vector<WordRecord>
     WordRecord& operator=(const WordRecord&) = default;
+
+    std::string get_word(void) const
+    {
+        return word;
+    }
+
+    size_t get_word_id(void) const
+    {
+        return word_id;
+    }
 };
 
 // Each occurrence
@@ -47,6 +140,8 @@ struct OccurrenceNode
 
     OccurrenceNode* next;   // pointer to next occurrence
     OccurrenceNode* prev;   // pointer to previous occurrence
+
+    OccurrenceNode() = default;
 
     OccurrenceNode(size_t _line, size_t _token, OccurrenceNode* _next, OccurrenceNode* _prev) : line(_line), token(_token), next(_next), prev(_prev)
     {

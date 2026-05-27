@@ -6,11 +6,30 @@
 #ifndef CSV_PARSER_LIB_PARSER_HH
 #define CSV_PARSER_LIB_PARSER_HH
 
+#define TOKEN_ID_ORIGINATE_AT_VALUE 1
+
+/*
+    Include parser-level structures.
+    Explicitly include headers where a file specifically relies on a type
+    from another package. 
+    it resolves the circular dependency successfully so the program compiles and works as expected.
+ */
+#include "./../../../Corpus/lib/src/Serialisation.hh"
+
 class Parser
 {
-    std::string _file_name;
-    std::ifstream _file;
+    std::string _ifile_name;
+    std::ifstream _ifile;
     bool _is_open;
+
+    size_t bucket_count;
+    size_t bucket_used;
+
+    size_t mxntpl; // max number of tokens per line, used to size the token array in each Line struct
+    size_t mnntpl; // min number of tokens per line, used to size the token array in each Line struct
+
+    size_t nol; // number of lines in the corpus, used to size the line array in the Corpus struct
+    size_t tnt; // total number of tokens in the corpus, used to size the token array in the Corpus struct
 
     /*
      * The number of buckets in the hash table used to index tokens encountered
@@ -47,25 +66,80 @@ class Parser
     size_t line_number;
     size_t token_number;*/
 
+        void free_tables(const size_t* index_table, WordRecord** hash_table, LINE* line_head, size_t bucket_used) 
+        {   
+            std::cout<< "BUCKET USED = " << bucket_used << std::endl;
+
+            /*while (line_head != nullptr)
+            {
+                LINE* next_line = line_head->next;
+                while (line_head->tokens != nullptr)
+                {
+                    TOKEN* next_token = line_head->tokens->next;
+                    line_head->tokens->occurrence = nullptr;
+                    //delete line_head->tokens;
+                    line_head->tokens = next_token;
+                }                
+                delete line_head;
+                line_head = next_line;
+            }*/
+            
+            for (size_t i = 0; i < bucket_used; ++i)
+            {                
+                size_t key = index_table[i];
+                WordRecord* w_rec = hash_table[key];
+
+                if (w_rec != nullptr)
+                {
+                    OccurrenceNode* current = w_rec->head; 
+
+                    while (current != nullptr)
+                    {
+                        OccurrenceNode* next = current->next;
+                        delete current;
+                        current = next;
+                    }
+                
+                    w_rec->head = nullptr;
+                    w_rec->n = 0;
+                }
+            }
+
+            
+            while (line_head != nullptr)
+            {
+                LINE* next_line = line_head->next;
+                while (line_head->tokens != nullptr)
+                {
+                    TOKEN* next_token = line_head->tokens->next;
+                    line_head->tokens->occurrence = nullptr;
+                    //delete line_head->tokens;
+                    line_head->tokens = next_token;
+                }                
+                delete line_head;
+                line_head = next_line;
+            }
+        }  
+
     public:
 
         // Constructors
-        Parser() : _file_name(), _file(), _is_open(false)  /*,bucket_count(size_t(KEYS_COMMON_STARTING_SIZE)), buckets_used(0),*/ /*hash_table(nullptr), index_table(nullptr), line_number(0), token_number(0)*/   
+        Parser() : _ifile_name(), _ifile(), _is_open(false), bucket_count(0), bucket_used(0), mxntpl(0), mnntpl(std::numeric_limits<size_t>::max()), nol(0), tnt(0)  /*,bucket_count(size_t(KEYS_COMMON_STARTING_SIZE)), buckets_used(0),*/ /*hash_table(nullptr), index_table(nullptr), line_number(0), token_number(0)*/   
         {
 
         }
 
-        explicit Parser(const std::string& name) : _file_name(name), _file(), _is_open(false)/*, bucket_count(size_t(KEYS_COMMON_STARTING_SIZE)), buckets_used(0),*/ /*hash_table(nullptr), index_table(nullptr), line_number(0), token_number(0)*/
+        explicit Parser(const std::string& iname/*, const std::string& oname*/) : _ifile_name(iname), _ifile(), _is_open(false), bucket_count(0), bucket_used(0), mxntpl(0), mnntpl(std::numeric_limits<size_t>::max()), nol(0), tnt(0) /*, bucket_count(size_t(KEYS_COMMON_STARTING_SIZE)), buckets_used(0),*/ /*hash_table(nullptr), index_table(nullptr), line_number(0), token_number(0)*/
         {
-            _file.open(_file_name);
+            _ifile.open(_ifile_name);
 
-            if (_file.is_open())
+            if (_ifile.is_open())
             {
                 _is_open = true;
             }
             else
             {
-                throw std::runtime_error("Parser::Parser(const std::string&) Error: Could not open file " + _file_name);
+                throw std::runtime_error("Parser::Parser(const std::string&) Error: Could not open file " + _ifile_name);
             }
 
             try
@@ -88,6 +162,24 @@ class Parser
         // Non‑copyable because of file stream
         Parser(const Parser&) = delete;
         Parser& operator=(const Parser&) = delete;
+
+        void reset(void)
+        {
+            if (_is_open)
+            {
+                _ifile.clear(); // Clear any error flags
+                _ifile.seekg(0); // Move to the beginning of the file            
+            }
+        }
+
+        void close(void)
+        {
+            if (_is_open)
+            {
+                _ifile.close();
+                _is_open = false;
+            }
+        }
     
         /*
             Move constructor: Transfers ownership of the file stream from the
@@ -101,6 +193,792 @@ class Parser
  
         // Destructor – file closed automatically
         ~Parser() = default;
+
+        WordRecord_new** build_hash_table_very_new(void)
+        {
+            bucket_count = KEYS_COMMON_STARTING_SIZE;
+            bucket_used = 0;
+            nol = 0;
+            tnt = 0;
+
+            // hash_table is indexed by hash key, stores pointers to WordRecord object
+            WordRecord_new** hash_table = nullptr;
+
+            try
+            {
+                hash_table = new WordRecord_new*[bucket_count](); // Create array of pointers to WordRecord and return address of first element of the array
+                /*
+                 * The () at the end is critical — it zero-initialises every pointer to nullptr.
+                 * Without it, all bucket pointers are uninitialised garbage, and your
+                 * (hash_table[key] == nullptr) check for unique words becomes undefined behaviour.
+                 */
+            }
+            catch (const std::bad_alloc& e)
+            {    
+                throw std::runtime_error("Parser::build_hash_table_very_new(void) Error: " + std::string(e.what()));
+            }
+
+            for (auto& line : *this)
+            {
+                //std::cout<< "Processing line  with " << line.size() << " tokens." << std::endl;
+
+                for (auto& token : line)                
+                {
+                    /*
+                        Empty String Check
+                        -------------------
+                        The word can be an empty string, which is not a valid word for the hash table                        
+                     */
+                    if (token == "")
+                    {
+                        continue;
+                    }
+
+                    size_t key = Keys::generate_key(token, bucket_count); 
+                    
+                    if (hash_table[key] == nullptr) // Case A: New Word 
+                    {
+                        try
+                        {
+                            hash_table[key] = new WordRecord_new(bucket_used + TOKEN_ID_ORIGINATE_AT_VALUE, token, 1); // Create new WordRecord for this unique token and insert into hash table at the generated key
+                                                                                                                       // Token ID always originate at TOKEN_ID_ORIGINATE_AT_VALUE 
+                        }
+                        catch (const std::bad_alloc& e)
+                        {
+                            throw std::runtime_error("Parser::build_hash_table_very_new(void) Error: " + std::string(e.what()));
+                        }
+                        
+                        bucket_used++; // Increment count of used buckets for load factor calculation
+                    }
+                    else if (hash_table[key]->get_word() == token) // Case B: Direct Match
+                    {
+                        hash_table[key]->n++; // Increment frequency count for this word
+                    }
+                    else // Case C or D: Collision — need to probe for an empty bucket or a direct match
+                    {
+                        size_t probe = (key + 1) % bucket_count; // Linear probing
+
+                        while (probe != key) // Loop until we circle back to the original key
+                        {
+                            if (hash_table[probe] == nullptr) // Case D: New Displaced Word
+                            {
+                                try
+                                {
+                                    hash_table[probe] = new WordRecord_new(bucket_used + TOKEN_ID_ORIGINATE_AT_VALUE, token, 1); // Create new WordRecord for this unique token and insert into hash table at the probed key
+                                }
+                                catch (const std::bad_alloc& e)
+                                {
+                                    throw std::runtime_error("Parser::build_hash_table_very_new(void) Error: " + std::string(e.what()));
+                                }
+
+                                bucket_used++; // Increment count of used buckets for load factor calculation
+                                break;
+                            }
+                            else if (hash_table[probe]->get_word() == token) // Case C: Probe Match
+                            {
+                                hash_table[probe]->n++; // Increment frequency count for this word
+                                break;
+                            }
+                            //else
+                            //{
+                                probe = (probe + 1) % bucket_count; // Move to the next bucket
+                            //}
+                        }
+
+                        if (probe == key)
+                        {
+                            throw std::runtime_error("Parser::build_hash_table_very_new(void) Error: Hash table is full, cannot insert new word.");
+                        }
+                    }
+
+                    if (token.size() > mxntpl)
+                    {
+                        mxntpl = token.size();
+                    }
+
+                    if (token.size() < mnntpl)
+                    {
+                        mnntpl = token.size();
+                    }
+
+                    /*
+                        Check if the hash table needs to be rehashed
+                        Note: Integer division would truncate the result, so we cast to double
+                    */
+                    if ((static_cast<double>(bucket_used) / static_cast<double>(bucket_count)) > KEYS_LOAD_FACTOR_THRESHOLD)
+                    {
+                        /*
+                            Rehash all existing entries into new table
+                            Do NOT reset buckets_used, carry the real count forward
+                        */
+                        size_t old_bucket_count = bucket_count;
+                        bucket_count = Keys::next_prime(bucket_count);
+
+                        WordRecord_new** new_hash_table = nullptr;    
+
+                        try
+                        {
+                            new_hash_table = new WordRecord_new*[bucket_count](); // Create new hash table with updated bucket count
+                            /*
+                             * The () at the end is critical — it zero-initialises every pointer to nullptr.
+                             * Without it, all bucket pointers are uninitialised garbage, and your
+                             * (hash_table[key] == nullptr) check for unique words becomes undefined behaviour.
+                             */
+                        }
+                        catch (const std::bad_alloc& e)
+                        {
+                            throw std::runtime_error("Parser::build_hash_table_very_new(void) Error: " + std::string(e.what()));
+                        }
+
+                        // Rehash all entries from old table into new table
+                        for (size_t i = 0; i < old_bucket_count; ++i)
+                        {
+                            if (hash_table[i] != nullptr)  // Entry exists
+                            {
+                                WordRecord_new* entry = hash_table[i];  // Copy the pointer
+                                key = Keys::generate_key(entry->get_word(), bucket_count);
+
+                                if (new_hash_table[key] == nullptr) // Case A: New Word 
+                                {
+                                    new_hash_table[key] = entry;                                                                                              
+                                }                    
+                                else // Collision — need to probe for an empty bucket or a direct match
+                                {
+                                    size_t probe = (key + 1) % bucket_count; // Linear probing
+
+                                    while (probe != key) // Loop until we circle back to the original key
+                                    {
+                                        if (new_hash_table[probe] == nullptr) // Case D: New Displaced Word
+                                        {
+                                            new_hash_table[probe] = entry;
+                                            break;
+                                        }
+
+                                        probe = (probe + 1) % bucket_count; // Move to the next bucket
+                                    }
+
+                                    if (probe == key)
+                                    {
+                                        throw std::runtime_error("Parser::build_hash_table_very_new(void) Error: Hash table is full, cannot insert new word.");
+                                    }
+                                }
+                            }
+                        }
+
+                        delete[] hash_table; // Free old table
+                        hash_table = new_hash_table; // Point to new table
+                    }
+
+                    tnt++; // Increment total token count for the corpus
+                }
+
+                nol++;
+
+                if (nol % CORPUS_SERIALIZATION_CHECKPOINT_INTERVAL == 0)
+                {
+                    std::cout<< "Rached line " << nol << std::endl;
+                }
+            }
+                        
+            // Go to the top of the file
+            reset();
+            
+            return hash_table;
+        }
+
+        /*
+         * Build hash table with checkpoints to verify correctness
+         */
+        TABLES* build_hash_table_with_checkpoints(TABLES* tables = nullptr, HEADER* h = nullptr) 
+        {
+            // Linked list of lines in the corpus. Each line contains an array of tokens in that line.
+            LINE *lines_head = nullptr, *lines_tail = nullptr;
+
+            size_t bucket_count = KEYS_COMMON_STARTING_SIZE;
+            size_t bucket_used = 0;
+
+            size_t token_number = 0, line_number = 0;
+            size_t mxntpl = 0, mnntpl = std::numeric_limits<size_t>::max(); // Maximum and Minimum number of tokens in a largest and smallest line
+            size_t tnt = 0; // Total number of tokens
+
+            // hash_table is indexed by hash key, stores pointers to WordRecord object
+            WordRecord** hash_table = nullptr;
+            // index_table is indexed by word_id (0..bucket_used-1)
+            size_t* index_table = nullptr;
+
+#if CORPUS_SERIALIZATION_CHECKPOINT_INTERVAL > 0
+            Serialisation serialisation; // Serialisation object for checkpointing
+            size_t starting_line = 0;
+            size_t starting_bucket = 0;
+#endif  
+            try
+            {
+                if (tables == nullptr)
+                {
+                    hash_table = new WordRecord*[bucket_count](); // Create array of pointers to WordRecord and return address of first element of the array
+                }
+                // index_table is indexed by word_id (0..bucket_used-1)
+                // Safe because load factor guarantees bucket_used < bucket_count always
+                if (tables == nullptr)
+                {
+                    index_table = new size_t[bucket_count](); // Create array of hashed keys (size_t) and return address of first element of the array
+                }
+                /*
+                 * The () at the end is critical — it zero-initialises every pointer to nullptr.
+                 * Without it, all bucket pointers are uninitialised garbage, and your
+                 * (hash_table[key] == nullptr) check for unique words becomes undefined behaviour.
+                 */
+
+                if (tables == nullptr)
+                {
+                    tables = new TABLES();
+                }
+                else
+                {
+                    hash_table = tables->hash_to_word_record;
+                    index_table = tables->word_id_to_hash;
+                    lines_head = tables->lines;
+                    lines_tail = tables->lines;
+                    
+                    while (lines_tail->next != nullptr)
+                    {
+                        lines_tail = lines_tail->next;
+                    }
+                    
+                    bucket_count = tables->get_bucket_count();
+                    bucket_used = tables->get_bucket_used();
+                    
+                    //line_number = tables->line_number;
+                    //token_number = tables->token_number;
+
+                    mxntpl = tables->get_maximum_tokens_per_line();
+                    mnntpl = tables->get_minimum_tokens_per_line();
+                    tnt = tables->get_total_tokens();
+#if CORPUS_SERIALIZATION_CHECKPOINT_INTERVAL > 0
+                    starting_line = h->line_count;
+                    starting_bucket = bucket_used;
+#endif                        
+                }                                
+            }
+            catch (const std::bad_alloc& e)
+            {    
+                throw std::runtime_error("Parser::build_hash_table_with_checkpoints(void) Error: " + std::string(e.what()));
+            }
+
+            for (auto& line : *this)
+            {
+#if CORPUS_SERIALIZATION_CHECKPOINT_INTERVAL > 0                
+                if (line_number < starting_line)
+                {
+                    line_number++;
+                    continue;
+                }             
+#endif                
+                if (lines_head == nullptr) // First line — need to create head of the linked list of lines
+                {
+                    try
+                    {
+                        lines_head = new LINE(); // Create a new line and append it to the linked list of lines
+                        lines_head->prev = nullptr;
+                        lines_head->next = nullptr;
+                        lines_tail = lines_head; // Set the tail pointer to the head (since it's the only line so far)
+                    }
+                    catch (const std::bad_alloc& e)
+                    {
+                        throw std::runtime_error("Parser::build_hash_table(void) Error: " + std::string(e.what()));
+                    }  
+                }
+                else
+                {
+                    try
+                    {
+                        lines_tail->next = new LINE(); // Create a new line and append it to the linked list of lines
+                        lines_tail->next->prev = lines_tail;
+                        lines_tail->next->next = nullptr;
+                        lines_tail = lines_tail->next; // Move the new line pointer to the tail pointer
+                    }
+                    catch (const std::bad_alloc& e)
+                    {
+                        throw std::runtime_error("Parser::build_hash_table(void) Error: " + std::string(e.what()));
+                    }
+                }
+
+                lines_tail->n = 0; // Set the number of tokens in the line
+                lines_tail->tokens = nullptr; // Set the pointer to the first token in the line
+
+                TOKEN* tokens = nullptr; // Traversal cursor for the linked list of tokens in the current line
+
+                for (auto& token : line)
+                {
+                    if (lines_tail->tokens == nullptr) // First token in the line — need to create head of the token linked list for this line
+                    {
+                        try
+                        {
+                            lines_tail->tokens = new TOKEN(); // Create a new token and append it to the linked list of tokens for this line
+                            lines_tail->tokens->next = nullptr;
+                            lines_tail->tokens->prev = nullptr;
+
+                            tokens = lines_tail->tokens; // Set the token pointer to the head of the token linked list for this line
+                        }
+                        catch (const std::bad_alloc& e)
+                        {
+                            throw std::runtime_error("Parser::build_hash_table(void) Error: " + std::string(e.what()));
+                        }                        
+                    }
+                    else
+                    {
+                        try
+                        {
+                            tokens->next = new TOKEN(); // Create a new token and append it to the linked list of tokens for this line
+                            tokens->next->prev = tokens;
+                            tokens->next->next = nullptr;
+
+                            tokens = tokens->next; // Move the token pointer to the new token
+                        }
+                        catch (const std::bad_alloc& e)
+                        {
+                            throw std::runtime_error("Parser::build_hash_table(void) Error: " + std::string(e.what()));
+                        }                        
+                    }
+
+                    lines_tail->n++; // Increment the number of tokens in the line
+
+                    OccurrenceNode* occurrence = nullptr;
+                    WordRecord* word_record = nullptr;
+                    
+                    size_t key = Keys::generate_key(token, bucket_count);
+
+                    /*if (key == 0)
+                    {
+                        std::cout<< "key is zero" << std::endl;   
+                    }*/
+                                        
+                    // CASE A: bucket empty → new word, direct natural bucket placement                     
+                    if (hash_table[key] == nullptr)
+                    {                        
+                        try
+                        {
+                            occurrence = new OccurrenceNode(line_number, token_number, nullptr, nullptr);
+                            word_record = new WordRecord(bucket_used + TOKEN_ID_ORIGINATE_AT_VALUE, token, 1, occurrence); // Initialize it to 1 on first insertion
+                            hash_table[key] = word_record;
+                            index_table[word_record->word_id] = key;
+                        }
+                        catch (const std::bad_alloc& e)
+                        {   
+                            // Clean up allocated memory before throwing
+                            if (occurrence != nullptr)
+                            {
+                                delete occurrence;
+                            }
+                            if (word_record != nullptr)
+                            {
+                                delete word_record;
+                            }
+                            throw std::runtime_error("Parser::build_hash_table(void) Error: " + std::string(e.what()));
+                        }
+
+                        tokens->token_id = word_record->word_id; // Set the token_id of the token to the word_id of the word_record
+                        /*tokens->occurrence = occurrence; // Set the occurrence of the token to the occurrence node created for the word_record*/
+
+                        bucket_used++;     
+                    }
+                    else // Token is already in the hash table, it could be a collision as well as the same word at a different position
+                    {
+                        WordRecord* current = hash_table[key];
+
+                        // Case B — Same repeated word (direct match), no collision and went to natural bucket and not displaced
+                        if (current->get_word() == token)
+                        {
+                            if (current->head == nullptr && current->n == 0) // All the previous occurances were already recorded in the file
+                            { 
+                                try
+                                {
+                                    current->head = new OccurrenceNode(line_number, token_number, nullptr, nullptr); // Create a new occurrence node and append it to the linked list of occurrences for this line
+                                    current->n = 1; // Set the number of occurrences of the word to 1
+                                }
+                                catch (const std::bad_alloc& e)
+                                {   
+                                    throw std::runtime_error("Parser::build_hash_table_with_checkpoints(void) Error: " + std::string(e.what()));
+                                }
+                            }
+                            else // All occurances are intact since the last recording in the file session (if any such session/s took place)
+                            {
+                                word_record = hash_table[key];
+                                occurrence = word_record->head; // Get the head of the linked list
+ 
+                                while (occurrence->next != nullptr) // Traverse to the end of the linked list
+                                {                             
+                                    occurrence = occurrence->next;
+                                }
+                                try
+                                { 
+                                    // Create a new occurrence node and append it to the end of the linked list which has all occurrences of this token/word in whole of the corpus
+                                    occurrence->next = new OccurrenceNode(line_number, token_number, nullptr, occurrence);
+                                    word_record->n++; // Increment the n of the word_record for this token/word in the corpus   
+                                }
+                                catch (const std::bad_alloc& e) 
+                                { 
+                                    throw std::runtime_error("Parser::build_hash_table(void) Error: " + std::string(e.what()));
+                                }
+                            
+                                tokens->token_id = word_record->word_id; // Set the token_id of the token to the word_id of the word_record 
+                                /*tokens->occurrence = occurrence->next; // Set the occurrence of the token to the occurrence node created for the word_record*/                       
+                            }
+                        }
+                        else // Collision, start probing for empty bucket
+                        {
+                            size_t probe = (key + 1) % bucket_count;
+
+                            while (probe != key)
+                            {
+                                // Case D — empty bucket during probe — new word displaced from natural bucket to a probed bucket
+                                if (hash_table[probe] == nullptr)
+                                {   
+                                    /*std::cout<< "1"  << std::endl;*/
+
+                                    try
+                                    {
+                                        occurrence = new OccurrenceNode(line_number, token_number, nullptr, nullptr);
+                                        word_record = new WordRecord(bucket_used + TOKEN_ID_ORIGINATE_AT_VALUE, token, 1, occurrence); // Initialize it to 1 on first insertion
+                                        hash_table[/*key*/probe] = word_record;
+                                        index_table[word_record->word_id] = /*key*/probe;
+                                    }
+                                    catch (const std::bad_alloc& e)
+                                    {   
+                                        // Clean up allocated memory before throwing
+                                        if (occurrence != nullptr)
+                                        {
+                                            delete occurrence;
+                                        }
+                                        if (word_record != nullptr)
+                                        {
+                                            delete word_record;
+                                        }
+                                        throw std::runtime_error("Parser::build_hash_table(void) Error: " + std::string(e.what()));
+                                    }
+
+                                    tokens->token_id = word_record->word_id; // Set the token_id of the token to the word_id of the word_record
+                                    /*tokens->occurrence = occurrence; // Set the occurrence of the token to the occurrence node created for the word_record*/
+                                    
+                                    bucket_used++;
+                                    break;
+                                }
+                                // Case C  (probe match) — same repeated word, displaced from natural bucket to probed bucket                               
+                                else if (hash_table[probe]->get_word() == token)
+                                {                                    
+                                    WordRecord* word_record = hash_table[probe];
+
+                                    if (word_record->head == nullptr && word_record->n == 0) // All the previous occurances were already recorded in the file
+                                    { 
+                                        /*std::cout<< "2.1" << std::endl;*/
+                                        try
+                                        {
+                                            word_record->head = new OccurrenceNode(line_number, token_number, nullptr, nullptr); // Create a new occurrence node and append it to the linked list of occurrences for this line
+                                            word_record->n = 1; // Set the number of occurrences of the word to 1
+
+                                            tokens->occurrence = word_record->head; 
+
+                                            /*std::cout<< "2.1.1" << std::endl;*/
+                                        }
+                                        catch (const std::bad_alloc& e)
+                                        {   
+                                            throw std::runtime_error("Parser::build_hash_table_with_checkpoints(void) Error: " + std::string(e.what()));
+                                        }
+                                    }
+                                    else // All occurances are intact since the last recording in the file session (if any such session/s took place)
+                                    {                                 
+                                        occurrence = word_record->head; // Get the head of the linked list
+
+                                        while (occurrence->next != nullptr) // Traverse to the end of the linked list
+                                        {                             
+                                            occurrence = occurrence->next;
+                                        }
+                                        try
+                                        { 
+                                            // Create a new occurrence node and append it to the end of the linked list which has all occurrences of this token/word in whole of the corpus
+                                            occurrence->next = new OccurrenceNode(line_number, token_number, nullptr, occurrence);
+                                            word_record->n++; // Increment the n of the word_record for this token/word in the corpus   
+
+                                            //tokens->occurrence = occurrence->next; 
+                                        }
+                                        catch (const std::bad_alloc& e) 
+                                        { 
+                                            throw std::runtime_error("Parser::build_hash_table(void) Error: " + std::string(e.what()));
+                                        }
+                                    }
+
+                                    tokens->token_id = word_record->word_id; // Set the token_id of the token to the word_id of the word_record 
+
+                                    break;
+                                }
+
+                                probe = (probe + 1) % bucket_count;
+                            }
+                        }
+                    }
+
+                    token_number++;
+
+                   /*
+                        Check if the hash table needs to be rehashed
+                        Note: Integer division would truncate the result, so we cast to double
+                    */
+                    if ((static_cast<double>(bucket_used) / static_cast<double>(bucket_count)) > KEYS_LOAD_FACTOR_THRESHOLD)
+                    {
+                       /*
+                            Rehash all existing entries into new table
+                            Do NOT reset buckets_used, carry the real count forward
+                        */
+                        size_t old_bucket_count = bucket_count;
+                        bucket_count = Keys::next_prime(bucket_count);
+
+                        WordRecord** new_hash_table = nullptr;
+                        size_t* new_index_table = nullptr;
+
+                        try
+                        {
+                            new_hash_table = new WordRecord*[bucket_count]();
+                            // new_index_table is indexed by word_id (0..bucket_used-1)
+                            // Safe because load factor guarantees bucket_used < bucket_count always
+                            new_index_table = new size_t[bucket_count]();
+                            /*
+                             * The () at the end is critical — it zero-initialises every pointer to nullptr.
+                             * Without it, all bucket pointers are uninitialised garbage, and your
+                             * (hash_table[key] == nullptr) check for unique words becomes undefined behaviour.
+                             */
+                        }
+                        catch (const std::bad_alloc& e)
+                        {
+                            // Clean up allocated memory before throwing
+                            if (new_hash_table != nullptr)
+                            {
+                                delete[] new_hash_table;
+                            }
+                            if (new_index_table != nullptr)
+                            {
+                                delete[] new_index_table;
+                            }
+                            throw std::runtime_error("Parser::build_hash_table(void) Error: " + std::string(e.what()));
+                        }
+
+                        /*
+                            hash_table and index_table are rehashed here
+                            Both has same size determined by bucket_count
+                            Both are rehashed here because bucket_count is increased
+                         */
+                        for (size_t i = 0; i < old_bucket_count; i++)
+                        {
+                            if (hash_table[i] != nullptr)
+                            {
+                                /*
+                                    No check of the hash collision is done here, becuasse we are setting a threshold for the load factor.
+                                    Note: The load factor only reduces collision probability, it does not eliminate it. 
+                                    At any load factor, two different words can still hash to the same bucket. This is a data-loss bug, not a probability question.
+
+                                    But even then if collision did not happen when the token/word was first inserted, it will not happen later either.
+                                    Given that now the memory size is increased as well, the probability of collision is further reduced.
+                                 */
+                                /*
+                                    Empty String Check
+                                    -------------------
+                                    The word can be an empty string, which is not a valid word for the hash table
+                                    But this check should not be made here.
+                                    Instead this check should be made when the word is first inserted into the hash table.                                                                                                            
+                                 */ 
+                                size_t new_key = Keys::generate_key(hash_table[i]->word, bucket_count);
+
+                                if (new_hash_table[new_key] == nullptr)
+                                {
+                                    new_hash_table[new_key] = hash_table[i]; 
+                                    new_index_table[hash_table[i]->word_id] = new_key;  
+                                }
+                                else
+                                {
+                                    /*
+                                        Rehash Collision — Linear Probe with Infinite-Loop Guard
+                                        ─────────────────────────────────────────────────────────
+                                        During rehash, two words that lived in different buckets in the
+                                        old table can collide in the new table because the new bucket count
+                                        is different.  We resolve this with the same linear probing strategy
+                                        used during normal insertion: walk forward from new_key until an
+                                        empty slot is found.
+
+                                        Infinite-Loop Risk
+                                        ──────────────────
+                                        The termination condition  (probe != new_key)  relies on wrapping
+                                        all the way around the table and arriving back at new_key — which
+                                        only happens if at least one slot is empty somewhere in the table.
+                                        If next_prime() did not grow the table enough and bucket_used is
+                                        close to bucket_count, every slot could already be occupied by the
+                                        time a later entry is being rehashed, making full wrap-around
+                                        impossible and the loop infinite.
+
+                                        The load factor threshold (KEYS_LOAD_FACTOR_THRESHOLD) is the first
+                                        line of defence: it triggers rehash early enough that bucket_used
+                                        is always well below bucket_count.  But that threshold governs the
+                                        OLD table.  After next_prime() the new table is larger, yet by the
+                                        time the last entry of the old table is being rehashed, (bucket_used
+                                        / new_bucket_count) may still be uncomfortably high if next_prime()
+                                        returned a value only marginally larger.
+
+                                        The step counter below is the second line of defence.  If we have
+                                        probed more than bucket_count slots without finding an empty one,
+                                        the table is effectively full and continued probing is pointless.
+                                        We throw rather than spin forever.
+                                     */                                 
+                                    size_t probe = (new_key + 1) % bucket_count;
+                                    size_t steps = 0; // for counting the number of steps taken to find an empty slot
+                                                      // This is a safety measure against infinite loops in case the table is full (never grown enough by next_prime()).
+                                                      // However, given the load factor, this should never happen as soon table size reaches this threshold, it will rehash and increase its size.   
+                                                      // Even saftey counter is getting included.
+
+                                    // Linear probing to find an empty slot, until collision happens.
+                                    while (probe != new_key /*&& steps < bucket_count*/) // Until we circle back to the original index/key
+                                    {
+                                        if (new_hash_table[probe] == nullptr)
+                                        {
+                                            new_hash_table[probe] = hash_table[i]; 
+                                            new_index_table[hash_table[i]->word_id] = probe;  
+                                            break;
+                                        }
+                                        probe = (probe + 1) % bucket_count; // Linear probing with wrap-around at the end of the table
+                                                                            // If table is not big enough, then due to wrap-around collision with new_key may never happen.
+                                                                            // So, we are at risk of infinite loop here.
+            
+                                        steps = steps + 1; // Increment the safety counter
+
+                                        /*
+                                            Safety guard — should never fire under normal operating conditions.
+                                            If it does fire, it means next_prime() returned a value too close
+                                            to the old bucket_count, the new table filled up before all old
+                                            entries could be rehashed, and the wrap-around termination
+                                            condition (probe != new_key) can no longer be reached.
+                                            Increase KEYS_LOAD_FACTOR_THRESHOLD (lower the threshold ratio)
+                                            or ensure next_prime() grows the table by at least 2x to
+                                            guarantee sufficient headroom after every rehash.
+                                        */
+                                        if (steps >= bucket_count)
+                                        {
+                                            throw std::runtime_error(
+                                                "Parser::build_hash_table() Fatal: rehash linear probe "
+                                                "exhausted all " + std::to_string(bucket_count) + " buckets "
+                                                "while relocating word \"" + hash_table[i]->word + "\" "
+                                                "(word_id=" + std::to_string(hash_table[i]->word_id) + "). "
+                                                "The new table is full: bucket_used=" + std::to_string(bucket_used) +
+                                                " vs bucket_count=" + std::to_string(bucket_count) + ". "
+                                                "next_prime() did not grow the table enough — lower "
+                                                "KEYS_LOAD_FACTOR_THRESHOLD or guarantee next_prime() "
+                                                "returns at least 2x the previous bucket count."
+                                            );
+                                        }                                                                            
+                                    }                                    
+                                } 
+                            } 
+                        }
+
+                        delete[] hash_table;
+                        delete[] index_table;
+
+                        hash_table = new_hash_table;
+                        index_table = new_index_table;          
+                    }
+                    
+                    tnt = tnt + 1;
+#if CORPUS_SERIALIZATION_CHECKPOINT_INTERVAL > 0
+                    /*if (starting_bucket == 0 && bucket_used == 1)
+                    {
+                        starting_bucket = 0; // starting_bucket and starting_line originate at 0
+                    }
+                    else if (starting_bucket == 0)                        
+                    {
+                        starting_bucket = bucket_used - 2; // starting_bucket and starting_line originate at 0
+                    }*/
+#endif
+                }
+
+                if (token_number > mxntpl)
+                {
+                    mxntpl = token_number;
+                }
+
+                if (token_number < mnntpl)
+                {
+                    mnntpl = token_number;
+                }
+
+                token_number = 0;
+                line_number++;
+
+                tables->hash_to_word_record = hash_table;
+                tables->word_id_to_hash = index_table;
+                tables->lines = lines_head;
+
+                tables->bucket_count = bucket_count;
+                tables->bucket_used = bucket_used;
+
+                tables->ref_count = 1;
+
+                tables->maximum_tokens_per_line = mxntpl; // max
+                tables->minimum_tokens_per_line = mnntpl; // min
+                tables->total_tokens = tnt; // total number tokenss (vocabulary + redundency)
+
+                /*
+                    When hitting the checkpoint interval, generate a unique fully qualified 
+                    filename (fqn) containing the current line number and total tokens processed.
+                    
+                    When this condition is true:
+                    1. The fqn string is constructed to be used as the target file path.
+                    2. This fqn is intended to be passed to a serialization function 
+                       (e.g., Serialisation::save_tables) to save the current TABLES 
+                       state (the parsed corpus up to this point) to disk. This ensures 
+                       that progress is saved incrementally.
+                 */
+#if CORPUS_SERIALIZATION_CHECKPOINT_INTERVAL > 0                 
+                if (line_number % CORPUS_SERIALIZATION_CHECKPOINT_INTERVAL == 0)
+                {
+                    std::string fqn = CORPUS_SERIALIZATION_CHECKPOINT_FILENAME + std::string(".") + std::to_string(line_number) + std::string(".") + "intermediate_check_point_number" + std::string(CORPUS_SERIALIZATION_CHECKPOINT_EXTENSION);
+
+                    std::cout<< "Starting = " << starting_line << " Ending = " << line_number << std::endl;
+                    std::cout<< "Starting bucket = " << starting_bucket << " Ending bucket = " << bucket_used << std::endl;
+                    std::cout<< "-----------------------------------------------------------------------------------------------------------------------------------" << std::endl;
+                    
+                    serialisation.save_tables(tables, starting_bucket, starting_line, line_number, fqn);
+
+                    //free_tables(index_table, hash_table, lines_head, bucket_used);
+                    //lines_head = nullptr;
+                    //lines_tail = nullptr;
+
+                    starting_line = line_number; // starting_line originates at 0
+                    starting_bucket = bucket_used; // Likewise 
+
+                    serialisation.read_tables(fqn);
+
+                    //exit(0);
+                }
+#endif                           
+            }
+
+            serialisation.save_tables(tables, starting_bucket, starting_line, line_number, CORPUS_SERIALIZATION_FINAL_FILENAME);
+
+#if CORPUS_SERIALIZATION_CHECKPOINT_INTERVAL > 0                 
+            return nullptr;
+#else
+            tables->hash_to_word_record = hash_table;
+            tables->word_id_to_hash = index_table;
+            tables->lines = lines_head;
+
+            tables->bucket_count = bucket_count;
+            tables->bucket_used = bucket_used;
+
+            tables->ref_count = 1;
+
+            tables->maximum_tokens_per_line = mxntpl; // max
+            tables->minimum_tokens_per_line = mnntpl; // min
+            tables->total_tokens = tnt; // total number tokenss (vocabulary + redundency)
+
+            return tables;
+#endif
+        }
 
         /*
             ╔══════════════════════════════════════════════════════════════════════════════════╗
@@ -407,6 +1285,13 @@ class Parser
             size_t mxntpl = 0, mnntpl = std::numeric_limits<size_t>::max();; // Maximum and Minimum number of tokens in a largest and smallest line
             size_t tnt = 0; // Total number of tokens
 
+            TABLES* tables = nullptr;
+
+#if CORPUS_SERIALIZATION_CHECKPOINT_INTERVAL > 0
+            Serialisation serialisation; // Serialisation object for checkpointing
+            size_t starting_line = 0;
+            size_t starting_bucket = 0;
+#endif            
             try
             {
                 hash_table = new WordRecord*[bucket_count](); // Create array of pointers to WordRecord and return address of first element of the array
@@ -418,6 +1303,8 @@ class Parser
                  * Without it, all bucket pointers are uninitialised garbage, and your
                  * (hash_table[key] == nullptr) check for unique words becomes undefined behaviour.
                  */
+
+                tables = new TABLES();
             }
             catch (const std::bad_alloc& e)
             {
@@ -533,6 +1420,12 @@ class Parser
                         /*lines_tail->n++;*/ // Increment the number of tokens in the line
                         
                         bucket_used++; // Increment the number of buckets used                                                 
+#if CORPUS_SERIALIZATION_CHECKPOINT_INTERVAL > 0
+                        if (starting_bucket == 0)
+                        {
+                            starting_bucket = bucket_used;
+                        }  
+#endif                        
                     }
                     else
                     {
@@ -581,6 +1474,12 @@ class Parser
                                     /*lines_tail->n++;*/ // Increment the number of tokens in the line
                                                                        
                                     bucket_used++;
+#if CORPUS_SERIALIZATION_CHECKPOINT_INTERVAL > 0
+                                    if (starting_bucket == 0)
+                                    {
+                                        starting_bucket = bucket_used;
+                                    }                                    
+#endif                                    
                                     break;
                                 }
                                 // Case C  (probe match) — same repeated word, displaced from natural bucket to probed bucket                               
@@ -834,22 +1733,6 @@ class Parser
                 
                 token_number = 0;
                 line_number++;
-            }
-
-            //line_number = 0;
-            //token_number = 0;
-
-            if (is_open())
-            {
-                _file.clear();
-                _file.seekg(0);
-            }
-
-            TABLES* tables = nullptr;
-
-            try
-            {
-                tables = new TABLES();
 
                 tables->hash_to_word_record = hash_table;
                 tables->word_id_to_hash = index_table;
@@ -863,20 +1746,120 @@ class Parser
                 tables->maximum_tokens_per_line = mxntpl;
                 tables->minimum_tokens_per_line = mnntpl;
                 tables->total_tokens = tnt;
+
+/*
+    Automatic checkpoint — fires when line_number is a
+    non-zero multiple of PARSER_SERIALIZATION_CHECKPOINT_INTERVAL.
+    Writes the current TABLES state to a versioned binary file
+    so the build can be safely interrupted without losing work.
+ */
+#if CORPUS_SERIALIZATION_CHECKPOINT_INTERVAL > 0
+                // Initialize the starting line on the first pass
+                if (starting_line == 0)
+                {
+                    starting_line = line_number;        
+                }
+                
+                /*
+                    When hitting the checkpoint interval, generate a unique fully qualified 
+                    filename (fqn) containing the current line number and total tokens processed.
+                    
+                    When this condition is true:
+                    1. The fqn string is constructed to be used as the target file path.
+                    2. This fqn is intended to be passed to a serialization function 
+                       (e.g., Serialisation::save_tables) to save the current TABLES 
+                       state (the parsed corpus up to this point) to disk. This ensures 
+                       that progress is saved incrementally.
+                 */
+                if (line_number % CORPUS_SERIALIZATION_CHECKPOINT_INTERVAL == 0)
+                {
+                    std::string fqn = CORPUS_SERIALIZATION_CHECKPOINT_FILENAME + std::string(".") + std::to_string(line_number) + std::string(".") + std::to_string(tnt) + std::string(".") + "intermediate_check_point_number" + std::string(CORPUS_SERIALIZATION_CHECKPOINT_EXTENSION);
+
+                    try
+                    {
+                        serialisation.save_tables(tables, starting_bucket, starting_line, line_number, fqn);
+                        std::cout<< "Written Checkpoint: " << fqn << std::endl; 
+                    }
+                    catch (const std::exception& e)
+                    {
+                        std::cerr << "Parser::build_hash_table(void) Error: " << e.what() << std::endl; 
+                    }
+
+                    starting_line = 0;
+                    starting_bucket = 0;
+                }
+#endif
+            }
+
+            //line_number = 0;
+            //token_number = 0;
+
+            if (is_open())
+            {
+                _ifile.clear();
+                _ifile.seekg(0);
+            }
+
+            //TABLES* tables = nullptr;
+
+            try
+            {
+/*                
+                tables->hash_to_word_record = hash_table;
+                tables->word_id_to_hash = index_table;
+                tables->lines = lines_head;
+
+                tables->bucket_count = bucket_count;
+                tables->bucket_used = bucket_used;
+
+                tables->ref_count = 1;
+
+                tables->maximum_tokens_per_line = mxntpl;
+                tables->minimum_tokens_per_line = mnntpl;
+                tables->total_tokens = tnt;
+ */                
             }
             catch (const std::bad_alloc& e)
             {
                 // Corpus can be large. This is a real possibility, not a formality.             
                 throw std::runtime_error("Parser::build_hash_table(void) Error: " + std::string(e.what()));
             }
-            
+/*
+    On successful completion, before returning a pointer to the new TABLES struct,
+    the build function writes a versioned snapshot of the tables to disk. This way,
+    the build is crash-safe: if the program is terminated for any reason (power loss,
+    signal, user interrupt), the TABLES state can be restored from the last checkpoint,
+    avoiding the need to re-parse the entire corpus. The checkpoint file is placed in
+    PARSER_SERIALIZATION_DIR with a name following the pattern:
+    "corpus.tables.lines_N.tokens_M.checkpoint_K.bin"
+    where:
+        N = number of lines processed
+        M = total tokens processed (tnt)
+        K = checkpoint sequence number (zero-based)
+ */
+#if CORPUS_SERIALIZATION_CHECKPOINT_INTERVAL > 0
+            // Fully Qualified Name (FQN) of the checkpoint file:            
+            std::string fqn = CORPUS_SERIALIZATION_CHECKPOINT_FILENAME + std::string(".") + std::to_string(line_number) + std::string(".") + std::to_string(tnt) + std::string(".") + "check_point_number" + std::string(CORPUS_SERIALIZATION_CHECKPOINT_EXTENSION);
+            try
+            {
+                serialisation.save_tables(tables, starting_bucket, starting_line, line_number, fqn);
+                std::cout<< "Written Checkpoint: " << fqn << std::endl; 
+            }
+            catch (const std::exception& e)
+            {
+                std::cerr << "Parser::build_hash_table(void) Error: " << e.what() << std::endl; 
+            }
+
+            starting_line = 0;
+            starting_bucket = 0;
+#endif      
             return tables;
         }
 
         // Iterator access
         Iterator begin()
         { 
-            return Iterator(&_file);
+            return Iterator(&_ifile);
         }
         Iterator end()
         { 
@@ -888,9 +1871,44 @@ class Parser
         { 
             return _is_open;
         }
-        const std::string& filename() const
+        const std::string& ifilename() const
         { 
-            return _file_name;
+            return _ifile_name;
+        }
+
+        size_t get_bucket_count(void) const
+        {
+            return bucket_count;
+        }
+
+        size_t get_bucket_used(void) const
+        {
+            return bucket_used;
+        }
+
+        size_t get_mxntpl(void) const
+        {
+            return mxntpl;
+        }
+
+        size_t get_mnntpl(void) const
+        {
+            return mnntpl;
+        }
+
+        size_t get_nol(void) const
+        {
+            return nol;
+        }
+
+        size_t get_tnt(void) const
+        {
+            return tnt;
+        }
+
+        size_t get_vocab_size(void) const
+        {
+            return bucket_used;
         }
 };
 

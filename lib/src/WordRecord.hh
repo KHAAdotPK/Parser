@@ -88,6 +88,23 @@ struct Lines_new
 };
 typedef struct Lines_new LINES_NEW;
 
+struct words
+{
+    size_t n;
+    size_t* keys;
+
+    words() : n{0}, keys{nullptr}
+    {
+    }
+    
+    words(size_t _n, size_t* _keys) : n(_n), keys(_keys)
+    {
+    }    
+};
+
+typedef words WORDS;
+
+
 struct WordRecord
 {
     size_t word_id;         // unique integer assigned to this word, index into "word_id_to_hash table"

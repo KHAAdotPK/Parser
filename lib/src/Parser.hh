@@ -194,6 +194,129 @@ class Parser
         // Destructor – file closed automatically
         ~Parser() = default;
 
+        /*
+         * Dynamically builds a flat, cache-friendly table of lines and their tokens.
+         * 
+         * DESIGN CHOICE:
+         * This method replaces the older linked-list based build_lines() approach.
+         * Instead of allocating separate doubly-linked nodes for every line and token (which
+         * causes severe heap fragmentation and cache misses), it allocates a contiguous
+         * array of size_t keys for each line. 
+         * 
+         * BENEFITS:
+         * - Reduces dynamic memory allocations (from O(N_lines + N_tokens) to O(N_lines)).
+         * - Saves massive memory overhead by eliminating linked list pointers (next/prev).
+         * - Drastically improves CPU cache locality during training loops because token keys
+         *   for each line are contiguous in memory.
+         * 
+         * @param hash_table The vocabulary hash table used to look up token keys/indices.
+         * @return An array of WORDS pointers, where each WORDS struct owns a contiguous array of keys.
+         */
+        WORDS** build_lines_table(const WordRecord_new* const *const hash_table)
+        {
+            WORDS** table = nullptr;
+
+            try
+            {
+                table = new WORDS*[get_nol()]; 
+            }
+            catch (const std::bad_alloc& e)
+            {
+                table = nullptr;
+                throw std::runtime_error("Parser::build_lines_table(const WordRecord_new* const *const) Error: " + std::string(e.what()));
+            }
+
+            size_t i = 0;
+
+            for (auto& line : *this) // When you dereference the iterator (via `operator*()`), it returns a reference to its internal member `_current`, which is of type `std::vector<std::string>`
+                                     // Therefore, the loop variable `line` is of type `std::vector<std::string>&
+                                     // When you call `line.size()`, you are calling the standard library method `std::vector::size()` on the vector of tokens for the current line. It outputs the total count of parsed tokens on that line
+            {
+
+                WORDS* w_ptr = nullptr; 
+                
+                try
+                {
+                    w_ptr = new words(line.size(), nullptr);
+                    w_ptr->keys = new size_t[line.size()];
+                }
+                catch (std::bad_alloc& e)
+                {
+                    throw std::runtime_error("Parser::build_lines_table(const WordRecord_new* const *const) Error: " + std::string(e.what()));
+                }
+                
+                table[i] = w_ptr;
+
+                size_t key = 0;
+                size_t j = 0;
+
+                for (auto& token : line)                
+                {
+                    if (token.empty())
+                    {
+                        continue;
+                    }
+
+                    key = Keys::generate_key(token, bucket_count);
+
+                    WordRecord_new* w_rec = const_cast<WordRecord_new*>(hash_table[key]);
+                    
+                    if (w_rec == nullptr)
+                    {
+                        continue;
+                    }
+
+                    if (w_rec->get_word() == token)
+                    {
+                        // Hash found
+                        w_ptr->keys[j] = key;
+
+                        j++;
+
+                        continue;
+                    }
+                                        
+                    // Collision
+                    size_t probe = (key + 1) % bucket_count; // In keys.hh, after computing the raw djb2 hash, the index is compressed using the modulo operator
+
+                    while (probe != key)
+                    {
+                        w_rec = const_cast<WordRecord_new*>(hash_table[probe]);
+                        
+                        if (w_rec == nullptr)
+                        {
+                            throw std::runtime_error("Parser::build_lines_table(const WordRecord_new* const *const) Error: Could not find the key " + token);
+                        }
+                        
+                        if (w_rec->get_word() == token)
+                        {
+                            w_ptr->keys[j] = probe;
+                            break;
+                        }
+                        
+                        probe = (probe + 1) % bucket_count; // In keys.hh, after computing the raw djb2 hash, the index is compressed using the modulo operator
+                    }
+
+                    if (probe == key)
+                    {                     
+                        throw std::runtime_error("Parser::build_lines_table(const WordRecord_new* const *const) Error: Could not find the key " + token);
+                    }
+                    
+                    j++;
+                }
+
+                i++;
+            }
+
+            // Move to the top of the file
+            reset();
+            
+            return table;
+        }
+
+        /*
+            kEEP THIS VARIENT REMOVE EVERY OTHER VARIANT
+         */
         WordRecord_new** build_hash_table_very_new(void)
         {
             bucket_count = KEYS_COMMON_STARTING_SIZE;
